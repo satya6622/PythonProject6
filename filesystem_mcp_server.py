@@ -224,13 +224,18 @@ def main() -> None:
     parser.add_argument("--max-file-bytes", type=int, default=int(os.environ.get("MCP_MAX_FILE_BYTES", "1000000")))
     args = parser.parse_args()
     server = McpServer(FilesystemService(ServerConfig(Path(args.root), args.max_file_bytes)))
-    for line in sys.stdin:
-        try:
-            response = server.dispatch(json.loads(line))
-        except json.JSONDecodeError:
-            response = server.error(None, -32700, "Parse error")
-        if response is not None:
-            print(json.dumps(response), flush=True)
+    try:
+        for line in sys.stdin:
+            try:
+                response = server.dispatch(json.loads(line))
+            except json.JSONDecodeError:
+                response = server.error(None, -32700, "Parse error")
+            if response is not None:
+                print(json.dumps(response), flush=True)
+    except KeyboardInterrupt:
+        # Stdio servers normally run until their client closes stdin.  Treat an
+        # interactive Ctrl+C as a normal, quiet shutdown for demonstrations.
+        pass
 
 
 if __name__ == "__main__":
