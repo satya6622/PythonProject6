@@ -1,56 +1,45 @@
-# LangGraph resume matching agent
+# MCP resume matching assignment
 
-An explainable recruiting assistant that reads resumes exclusively through the included MCP filesystem server. It parses job requirements, performs lightweight lexical RAG retrieval, ranks an initial top 10, performs a second evidence-based screen, and produces final hire/hold/no-hire recommendations.
+`filesystem_mcp_server.py` is a stdio Model Context Protocol server. It speaks JSON-RPC 2.0 and exposes filesystem content as MCP resources plus six tools: listing, reading, metadata, searching, `watch_directory`, and fault-tolerant `batch_process`.
 
-## Architecture
+The server confines every resolved path to `--root`, sets a file-size limit, returns structured JSON-RPC errors, and does not emit log noise on stdout.
 
-`matching_agent.py` contains `AgentState`, which persists conversation history, parsed job requirements, candidate data, shortlist, scoring rationale, screening results, recommendations, and human feedback. The production graph is built with LangGraph's `StateGraph`; a dependency-free compatibility runner allows a classroom demo before installing dependencies.
+`matching_agent.py` contains no direct filesystem calls for resume discovery or reading. Its `McpClient` launches the server and the agent calls `list_directory` and `batch_process` over MCP before scoring resumes locally.
+
+## Workflow
 
 ```mermaid
-flowchart LR
-    A([START]) --> B[Parse JD / query]
-    B --> C[Extract requirements]
-    C --> D[RAG search resumes via MCP]
-    D --> E[Rank candidates: initial top 10]
-    E --> F[Deep analysis: second round]
-    F --> G[Hire / hold / no-hire]
-    G --> H[Generate explainable report]
-    H --> I[Human feedback / refinement]
-    I --> J([END])
-    I -. revised requirements .-> C
+sequenceDiagram
+    participant A as Matching agent
+    participant C as MCP client
+    participant S as Filesystem MCP server
+    participant F as Resume directory
+    A->>C: initialize / tools/list
+    C->>S: JSON-RPC 2.0 over stdio
+    A->>C: list_directory
+    C->>S: tools/call(list_directory)
+    S->>F: constrained directory read
+    F-->>S: resume paths
+    S-->>A: structured content
+    A->>C: batch_process(paths)
+    C->>S: tools/call(batch_process)
+    S->>F: safe UTF-8 reads
+    S-->>A: processed + per-file errors
+    A->>A: score and rank candidates
 ```
 
-The graph's node sequence is `START → parse_jd → extract_requirements → search_resumes → rank_candidates → deep_analysis → final_recommendations → generate_report → human_feedback → END`. In chat mode, feedback is appended to the saved JD and invokes a new graph run, making re-ranking explicit and reproducible.
-
-## Setup and run
+## Run
 
 ```bash
-python3 -m pip install -r requirements.txt
-python3 matching_agent.py "Find candidates with React and 3+ years experience" --root resumes
-python3 matching_agent.py --root resumes --chat
-python3 -m unittest -v
+python filesystem_mcp_server.py --root ./resumes
+python matching_agent.py "Python SQL engineer" --root ./resumes
+python -m unittest -v
 ```
-
-Example chat queries:
-
-```text
-Find me candidates with React and 3+ years experience
-Compare R012, R043, and R081 side by side
-Why did R012 rank higher?
-Require TypeScript and at least 5 years
-questions for R012
-```
-
-## Agent tools
-
-- `extract_requirements(jd)` separates must-have skills, nice-to-have skills, and the requested minimum experience.
-- `compare_candidates(candidate_ids)` gives a concise head-to-head comparison with scores, strengths, and gaps.
-- `generate_interview_questions(candidate_id)` turns demonstrated strengths and missing criteria into screening questions.
-
-The candidate score weights must-have evidence (55%), nice-to-have evidence (15%), experience (20%), and role-title relevance (10%). Each result exposes strengths, gaps, a plain-language ranking explanation, and a recommendation. Borderline candidates receive `HOLD / INTERVIEW`, making the areas to verify clear instead of silently discarding them.
 
 ## Test scenarios
 
-`test_conversation_flows.py` contains six end-to-end flows: requirement extraction, candidate search, top-candidate comparison, ranking explanation, iterative refinement/re-ranking, and interview-question generation. `test_mcp_workflow.py` continues to test MCP protocol, path protection, fault-tolerant batch reads, and the backwards-compatible ranking API.
+The tests cover protocol/resource discovery and resource reads; per-item batch errors plus directory-traversal prevention; and the complete agent-to-server batch ranking workflow.
 
-For a recording-ready walkthrough with the exact prompts and the explainability details to show, see [VIDEO_DEMO.md](VIDEO_DEMO.md).
+## Multi-MCP bonus extension
+
+`McpClient` is deliberately transport-focused. Instantiate a second client for a web-search or database MCP server, use that server's `tools/list` to discover its interface, then merge its returned job/context data with the filesystem batch results before scoring. This keeps integration at the agent layer rather than reintroducing custom tool code.
